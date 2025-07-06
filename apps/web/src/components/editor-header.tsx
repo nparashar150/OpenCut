@@ -7,22 +7,21 @@ import { useTimelineStore } from "@/stores/timeline-store";
 import { HeaderBase } from "./header-base";
 import { formatTimeCode } from "@/lib/time";
 import { useProjectStore } from "@/stores/project-store";
+import { useState } from "react";
+import { ExportDialog } from "./editor/export-dialog";
 
 export function EditorHeader() {
   const { getTotalDuration } = useTimelineStore();
   const { activeProject } = useProjectStore();
+  const [showExportDialog, setShowExportDialog] = useState(false);
 
   const handleExport = () => {
-    // TODO: Implement export functionality
-    console.log("Export project");
+    setShowExportDialog(true);
   };
 
   const leftContent = (
     <div className="flex items-center gap-2">
-      <Link
-        href="/projects"
-        className="font-medium tracking-tight flex items-center gap-2 hover:opacity-80 transition-opacity"
-      >
+      <Link href="/projects" className="font-medium tracking-tight flex items-center gap-2 hover:opacity-80 transition-opacity">
         <ChevronLeft className="h-4 w-4" />
         <span className="text-sm">{activeProject?.name}</span>
       </Link>
@@ -45,11 +44,9 @@ export function EditorHeader() {
   );
 
   return (
-    <HeaderBase
-      leftContent={leftContent}
-      centerContent={centerContent}
-      rightContent={rightContent}
-      className="bg-background border-b"
-    />
+    <>
+      <HeaderBase leftContent={leftContent} centerContent={centerContent} rightContent={rightContent} className="bg-background border-b" />
+      <ExportDialog open={showExportDialog} onOpenChange={setShowExportDialog} />
+    </>
   );
 }
