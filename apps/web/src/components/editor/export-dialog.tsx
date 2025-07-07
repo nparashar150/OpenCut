@@ -4,7 +4,7 @@ import { useFFmpegWorker } from "@/hooks/use-ffmpeg-worker";
 import { ExportOptions } from "@/lib/export-utils";
 import { useMediaStore } from "@/stores/media-store";
 import { useTimelineStore } from "@/stores/timeline-store";
-import { AlertCircle, Download, Info } from "lucide-react";
+import { AlertCircle, FileVideo, Info } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Alert, AlertDescription } from "../ui/alert";
@@ -35,7 +35,6 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
   const { tracks } = useTimelineStore();
   const { mediaItems } = useMediaStore();
   const [progress, setProgress] = useState(0);
-  const { isLoaded, error, worker } = useFFmpegWorker();
   const [isExporting, setIsExporting] = useState(false);
   const [exportMessage, setExportMessage] = useState("");
   const [options, setOptions] = useState<ExportOptions>({
@@ -44,16 +43,17 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
     quality: "high",
     fps: 30
   });
+  const { isLoaded, error, worker } = useFFmpegWorker();
 
+  // Calculate timeline duration
   const calculateDuration = () => {
     let maxDuration = 0;
-    for (const track of tracks) {
-      for (const clip of track.clips || []) {
-        const duration = clip.duration - clip.trimStart - clip.trimEnd;
-        const end = clip.startTime + duration;
-        if (end > maxDuration) maxDuration = end;
-      }
-    }
+    tracks.forEach((track) => {
+      track.clips?.forEach((clip) => {
+        const clipEnd = clip.duration - clip.trimStart - clip.trimEnd;
+        if (clipEnd > maxDuration) maxDuration = clipEnd;
+      });
+    });
     return maxDuration;
   };
 
@@ -179,7 +179,7 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Download className="h-5 w-5" />
+            <FileVideo className="h-5 w-5" />
             Export Project
           </DialogTitle>
           <DialogDescription>Configure your export settings and render your video</DialogDescription>
@@ -223,19 +223,19 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="mp4">
-                        <div className="flex flex-col justify-start items-start">
+                        <div className="flex flex-col items-start">
                           <div className="font-medium">MP4</div>
                           <div className="text-xs text-muted-foreground">Most compatible, H.264 codec</div>
                         </div>
                       </SelectItem>
                       <SelectItem value="webm">
-                        <div className="flex flex-col justify-start items-start">
+                        <div className="flex flex-col items-start">
                           <div className="font-medium">WebM</div>
                           <div className="text-xs text-muted-foreground">Web-optimized, VP8 codec</div>
                         </div>
                       </SelectItem>
                       <SelectItem value="mov">
-                        <div className="flex flex-col justify-start items-start">
+                        <div className="flex flex-col items-start">
                           <div className="font-medium">MOV</div>
                           <div className="text-xs text-muted-foreground">Apple-compatible, H.264 codec</div>
                         </div>
@@ -281,19 +281,19 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="high">
-                        <div className="flex flex-col justify-start items-start">
+                        <div className="flex flex-col items-start">
                           <div className="font-medium">High Quality</div>
                           <div className="text-xs text-muted-foreground">Best quality, larger file</div>
                         </div>
                       </SelectItem>
                       <SelectItem value="medium">
-                        <div className="flex flex-col justify-start items-start">
+                        <div className="flex flex-col items-start">
                           <div className="font-medium">Medium Quality</div>
                           <div className="text-xs text-muted-foreground">Balanced size and quality</div>
                         </div>
                       </SelectItem>
                       <SelectItem value="low">
-                        <div className="flex flex-col justify-start items-start">
+                        <div className="flex flex-col items-start">
                           <div className="font-medium">Low Quality</div>
                           <div className="text-xs text-muted-foreground">Smaller file, reduced quality</div>
                         </div>
@@ -365,7 +365,7 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
                 <span>Export Progress</span>
                 <span className="font-medium">{progress}%</span>
               </div>
-              <Progress value={progress} className="h-2" />
+              <Progress value={Math.min(progress, 100)} className="h-2" />
               {exportMessage && <div className="text-sm text-muted-foreground animate-pulse">{exportMessage}</div>}
             </div>
           </div>
@@ -383,7 +383,7 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
               </>
             ) : (
               <>
-                <Download className="mr-2 h-4 w-4" />
+                <FileVideo className="mr-2 h-4 w-4" />
                 Export Video
               </>
             )}
