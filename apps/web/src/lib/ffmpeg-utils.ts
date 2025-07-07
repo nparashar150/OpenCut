@@ -20,83 +20,74 @@ export const initFFmpeg = async (): Promise<FFmpeg> => {
   return ffmpeg;
 };
 
-export const generateThumbnail = async (
-  videoFile: File,
-  timeInSeconds: number = 1
-): Promise<string> => {
+export const generateThumbnail = async (videoFile: File, timeInSeconds: number = 1): Promise<string> => {
   const ffmpeg = await initFFmpeg();
-  
-  const inputName = 'input.mp4';
-  const outputName = 'thumbnail.jpg';
-  
+
+  const inputName = "input.mp4";
+  const outputName = "thumbnail.jpg";
+
   // Write input file
   await ffmpeg.writeFile(inputName, new Uint8Array(await videoFile.arrayBuffer()));
-  
+
   // Generate thumbnail at specific time
-  await ffmpeg.exec([
-    '-i', inputName,
-    '-ss', timeInSeconds.toString(),
-    '-vframes', '1',
-    '-vf', 'scale=320:240',
-    '-q:v', '2',
-    outputName
-  ]);
-  
+  await ffmpeg.exec(["-i", inputName, "-ss", timeInSeconds.toString(), "-vframes", "1", "-vf", "scale=320:240", "-q:v", "2", outputName]);
+
   // Read output file
   const data = await ffmpeg.readFile(outputName);
-  const blob = new Blob([data], { type: 'image/jpeg' });
-  
+  const blob = new Blob([data], { type: "image/jpeg" });
+
   // Cleanup
   await ffmpeg.deleteFile(inputName);
   await ffmpeg.deleteFile(outputName);
-  
+
   return URL.createObjectURL(blob);
 };
 
-export const trimVideo = async (
-  videoFile: File,
-  startTime: number,
-  endTime: number,
-  onProgress?: (progress: number) => void
-): Promise<Blob> => {
+export const trimVideo = async (videoFile: File, startTime: number, endTime: number, onProgress?: (progress: number) => void): Promise<Blob> => {
   const ffmpeg = await initFFmpeg();
-  
-  const inputName = 'input.mp4';
-  const outputName = 'output.mp4';
-  
+
+  const inputName = "input.mp4";
+  const outputName = "output.mp4";
+
   // Set up progress callback
   if (onProgress) {
-    ffmpeg.on('progress', ({ progress }) => {
+    ffmpeg.on("progress", ({ progress }) => {
       onProgress(progress * 100);
     });
   }
-  
+
   // Write input file
   await ffmpeg.writeFile(inputName, new Uint8Array(await videoFile.arrayBuffer()));
-  
+
   const duration = endTime - startTime;
-  
+
   // Trim video
   await ffmpeg.exec([
-    '-i', inputName,
-    '-ss', startTime.toString(),
-    '-t', duration.toString(),
-    '-c', 'copy', // Use stream copy for faster processing
+    "-i",
+    inputName,
+    "-ss",
+    startTime.toString(),
+    "-t",
+    duration.toString(),
+    "-c",
+    "copy", // Use stream copy for faster processing
     outputName
   ]);
-  
+
   // Read output file
   const data = await ffmpeg.readFile(outputName);
-  const blob = new Blob([data], { type: 'video/mp4' });
-  
+  const blob = new Blob([data], { type: "video/mp4" });
+
   // Cleanup
   await ffmpeg.deleteFile(inputName);
   await ffmpeg.deleteFile(outputName);
-  
+
   return blob;
 };
 
-export const getVideoInfo = async (videoFile: File): Promise<{
+export const getVideoInfo = async (
+  videoFile: File
+): Promise<{
   duration: number;
   width: number;
   height: number;
@@ -104,27 +95,27 @@ export const getVideoInfo = async (videoFile: File): Promise<{
 }> => {
   const ffmpeg = await initFFmpeg();
 
-  const inputName = 'input.mp4';
+  const inputName = "input.mp4";
 
   // Write input file
   await ffmpeg.writeFile(inputName, new Uint8Array(await videoFile.arrayBuffer()));
 
   // Capture FFmpeg stderr output with a one-time listener pattern
-  let ffmpegOutput = '';
+  let ffmpegOutput = "";
   let listening = true;
   const listener = (data: string) => {
     if (listening) ffmpegOutput += data;
   };
-  ffmpeg.on('log', ({ message }) => listener(message));
+  ffmpeg.on("log", ({ message }) => listener(message));
 
   // Run ffmpeg to get info (stderr will contain the info)
   try {
-    await ffmpeg.exec(['-i', inputName, '-f', 'null', '-']);
+    await ffmpeg.exec(["-i", inputName, "-f", "null", "-"]);
   } catch (error) {
     listening = false;
     await ffmpeg.deleteFile(inputName);
-    console.error('FFmpeg execution failed:', error);
-    throw new Error('Failed to extract video info. The file may be corrupted or in an unsupported format.');
+    console.error("FFmpeg execution failed:", error);
+    throw new Error("Failed to extract video info. The file may be corrupted or in an unsupported format.");
   }
 
   // Disable listener after exec completes
@@ -145,7 +136,9 @@ export const getVideoInfo = async (videoFile: File): Promise<{
   }
 
   const videoStreamMatch = ffmpegOutput.match(/Video:.* (\d+)x(\d+)[^,]*, ([\d.]+) fps/);
-  let width = 0, height = 0, fps = 0;
+  let width = 0,
+    height = 0,
+    fps = 0;
   if (videoStreamMatch) {
     width = parseInt(videoStreamMatch[1]);
     height = parseInt(videoStreamMatch[2]);
@@ -160,79 +153,68 @@ export const getVideoInfo = async (videoFile: File): Promise<{
   };
 };
 
-export const convertToWebM = async (
-  videoFile: File,
-  onProgress?: (progress: number) => void
-): Promise<Blob> => {
+export const convertToWebM = async (videoFile: File, onProgress?: (progress: number) => void): Promise<Blob> => {
   const ffmpeg = await initFFmpeg();
-  
-  const inputName = 'input.mp4';
-  const outputName = 'output.webm';
-  
+
+  const inputName = "input.mp4";
+  const outputName = "output.webm";
+
   // Set up progress callback
   if (onProgress) {
-    ffmpeg.on('progress', ({ progress }) => {
+    ffmpeg.on("progress", ({ progress }) => {
       onProgress(progress * 100);
     });
   }
-  
+
   // Write input file
   await ffmpeg.writeFile(inputName, new Uint8Array(await videoFile.arrayBuffer()));
-  
+
   // Convert to WebM
-  await ffmpeg.exec([
-    '-i', inputName,
-    '-c:v', 'libvpx-vp9',
-    '-crf', '30',
-    '-b:v', '0',
-    '-c:a', 'libopus',
-    outputName
-  ]);
-  
+  await ffmpeg.exec(["-i", inputName, "-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0", "-c:a", "libopus", outputName]);
+
   // Read output file
   const data = await ffmpeg.readFile(outputName);
-  const blob = new Blob([data], { type: 'video/webm' });
-  
+  const blob = new Blob([data], { type: "video/webm" });
+
   // Cleanup
   await ffmpeg.deleteFile(inputName);
   await ffmpeg.deleteFile(outputName);
-  
+
   return blob;
 };
 
-export const extractAudio = async (
-  videoFile: File,
-  format: 'mp3' | 'wav' = 'mp3'
-): Promise<Blob> => {
+export const extractAudio = async (videoFile: File, format: "mp3" | "wav" = "mp3"): Promise<Blob> => {
   const ffmpeg = await initFFmpeg();
-  
-  const inputName = 'input.mp4';
+
+  const inputName = "input.mp4";
   const outputName = `output.${format}`;
-  
+
   // Write input file
   await ffmpeg.writeFile(inputName, new Uint8Array(await videoFile.arrayBuffer()));
-  
+
   // Extract audio
   await ffmpeg.exec([
-    '-i', inputName,
-    '-vn', // Disable video
-    '-acodec', format === 'mp3' ? 'libmp3lame' : 'pcm_s16le',
+    "-i",
+    inputName,
+    "-vn", // Disable video
+    "-acodec",
+    format === "mp3" ? "libmp3lame" : "pcm_s16le",
     outputName
   ]);
-  
+
   // Read output file
   const data = await ffmpeg.readFile(outputName);
   const blob = new Blob([data], { type: `audio/${format}` });
-  
+
   // Cleanup
   await ffmpeg.deleteFile(inputName);
   await ffmpeg.deleteFile(outputName);
-  
+
   return blob;
 };
 
 // Helper function to calculate timeline duration
-const calculateTimelineDuration = (tracks: any[]): number => {
+export const calculateTimelineDuration = (tracks: any[]): number => {
   let maxDuration = 0;
   for (const track of tracks) {
     for (const clip of track.clips || []) {
@@ -243,7 +225,6 @@ const calculateTimelineDuration = (tracks: any[]): number => {
   }
   return maxDuration;
 };
-
 // Build timeline-based FFmpeg command
 const buildTimelineFFmpegCommand = (tracks: TimelineTrack[], mediaItemMap: Map<string, any>, mediaFileMap: Map<string, string>, outputFileName: string, options: any, timelineDuration: number): string[] => {
   const { format, resolution, quality, fps } = options;
@@ -301,7 +282,7 @@ const buildTimelineFFmpegCommand = (tracks: TimelineTrack[], mediaItemMap: Map<s
   videoTracks.forEach((track, trackIndex) => {
     if (track.muted) return;
 
-    track.clips?.forEach((clip: any, clipIndex: number) => {
+    track.clips?.forEach((clip, clipIndex: number) => {
       const mediaId = clip.mediaId;
       if (!mediaId || !inputMap.has(mediaId)) return;
 
@@ -312,14 +293,21 @@ const buildTimelineFFmpegCommand = (tracks: TimelineTrack[], mediaItemMap: Map<s
         const clipLabel = `[v${trackIndex}_${clipIndex}]`;
 
         if (mediaItem.type === "video") {
-          // For video: trim, scale, and set timestamp
+          // For video: trim from the original media file
+          // clip.duration is the duration on the timeline
+          // trimStart is where to start in the source file
+          // trimEnd is where to end in the source file
+          const sourceStart = clip.trimStart;
           const trimDuration = clip.duration - clip.trimStart - clip.trimEnd;
+
+          // Calculate the actual trim duration from the source
+          // If trimEnd is 0 or not set, calculate it based on clip duration
           videoFilterSteps.push(
             `[${inputIdx}:v]` +
-              `trim=start=${clip.trimStart}:duration=${trimDuration},` +
+              `trim=start=${sourceStart}:duration=${trimDuration},` +
               `setpts=PTS-STARTPTS,` +
-              `scale=${resolution.width}:${resolution.height}:force_original_aspect_ratio=decrease,` +
-              `pad=${resolution.width}:${resolution.height}:(ow-iw)/2:(oh-ih)/2:black` +
+              `scale=${resolution.width}:${resolution.height}:force_original_aspect_ratio=increase,` +
+              `crop=${resolution.width}:${resolution.height},` +
               `${clipLabel}`
           );
 
@@ -327,7 +315,7 @@ const buildTimelineFFmpegCommand = (tracks: TimelineTrack[], mediaItemMap: Map<s
           if (audioTracks.length === 0) {
             const audioClipLabel = `[va${trackIndex}_${clipIndex}]`;
             audioFilterSteps.push(
-              `[${inputIdx}:a]` + `atrim=start=${clip.trimStart}:duration=${trimDuration},` + `asetpts=PTS-STARTPTS,` + `adelay=${Math.round(clip.startTime * 1000)}|${Math.round(clip.startTime * 1000)}` + `${audioClipLabel}`
+              `[${inputIdx}:a]` + `atrim=start=${sourceStart}:duration=${trimDuration},` + `asetpts=PTS-STARTPTS,` + `adelay=${Math.round(clip.startTime * 1000)}|${Math.round(clip.startTime * 1000)}` + `${audioClipLabel}`
             );
             audioInputs.push(audioClipLabel);
           }
@@ -336,8 +324,8 @@ const buildTimelineFFmpegCommand = (tracks: TimelineTrack[], mediaItemMap: Map<s
           videoFilterSteps.push(
             `[${inputIdx}:v]` +
               `loop=loop=${Math.ceil(clip.duration * fps)}:size=1:start=0,` +
-              `scale=${resolution.width}:${resolution.height}:force_original_aspect_ratio=decrease,` +
-              `pad=${resolution.width}:${resolution.height}:(ow-iw)/2:(oh-ih)/2:black,` +
+              `scale=${resolution.width}:${resolution.height}:force_original_aspect_ratio=increase,` +
+              `crop=${resolution.width}:${resolution.height},` +
               `trim=duration=${clip.duration},` +
               `setpts=PTS-STARTPTS` +
               `${clipLabel}`
@@ -356,7 +344,7 @@ const buildTimelineFFmpegCommand = (tracks: TimelineTrack[], mediaItemMap: Map<s
   audioTracks.forEach((track, trackIndex) => {
     if (track.muted) return;
 
-    track.clips?.forEach((clip: any, clipIndex: number) => {
+    track.clips?.forEach((clip, clipIndex: number) => {
       const mediaId = clip.mediaId;
       if (!mediaId || !inputMap.has(mediaId)) return;
 
@@ -365,16 +353,19 @@ const buildTimelineFFmpegCommand = (tracks: TimelineTrack[], mediaItemMap: Map<s
 
       if (mediaItem?.type === "audio" || mediaItem?.type === "video") {
         const clipLabel = `[a${trackIndex}_${clipIndex}]`;
-        const trimDuration = (clip.trimEnd || clip.trimStart + clip.duration) - clip.trimStart;
+
+        // Calculate source trim duration
+        const sourceStart = clip.trimStart;
+        const trimDuration = clip.duration - clip.trimStart - clip.trimEnd;
 
         // Build audio filter chain
         let audioFilter = `[${inputIdx}:a]`;
 
-        // Trim audio
-        audioFilter += `atrim=start=${clip.trimStart}:duration=${trimDuration},`;
+        // Trim audio from source
+        audioFilter += `atrim=start=${sourceStart}:duration=${trimDuration},`;
         audioFilter += `asetpts=PTS-STARTPTS,`;
 
-        // Delay to correct position
+        // Delay to correct position on timeline
         audioFilter += `adelay=${Math.round(clip.startTime * 1000)}|${Math.round(clip.startTime * 1000)}`;
         audioFilter += clipLabel;
 
@@ -514,11 +505,11 @@ const exportProject = async (data: any) => {
     console.log("FFmpeg command:", ffmpegArgs.join(" "));
 
     // Set up progress tracking
-    ffmpeg.on("progress", ({ progress }) => {
-      const exportProgress = 25 + progress * 70; // 25-95%
+    ffmpeg.on("progress", ({ progress, time }) => {
+      // Clamp progress between 0 and 1 to prevent exceeding 100%
       postMessage({
         type: "EXPORT_PROGRESS",
-        progress: Math.round(exportProgress),
+        progress: progress * 100,
         message: `Rendering video... ${Math.round(progress * 100)}%`
       });
     });
@@ -531,12 +522,6 @@ const exportProject = async (data: any) => {
 
     // Execute FFmpeg command
     await ffmpeg.exec(ffmpegArgs);
-
-    postMessage({
-      type: "EXPORT_PROGRESS",
-      progress: 95,
-      message: "Finalizing export..."
-    });
 
     // Read output file
     const outputData = await ffmpeg.readFile(outputFileName);

@@ -5,7 +5,7 @@ import { ExportOptions } from "@/lib/export-utils";
 import { useMediaStore } from "@/stores/media-store";
 import { useTimelineStore } from "@/stores/timeline-store";
 import { AlertCircle, FileVideo, Info } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
@@ -15,6 +15,8 @@ import { Progress } from "../ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
+import { useEditorStore } from "@/stores/editor-store";
+import { calculateTimelineDuration } from "@/lib/ffmpeg-utils";
 
 interface ExportDialogProps {
   open: boolean;
@@ -22,11 +24,28 @@ interface ExportDialogProps {
 }
 
 const RESOLUTION_PRESETS = [
-  { label: "4K (3840x2160)", width: 3840, height: 2160, premium: true },
-  { label: "1080p (1920x1080)", width: 1920, height: 1080 },
-  { label: "720p (1280x720)", width: 1280, height: 720 },
-  { label: "480p (854x480)", width: 854, height: 480 },
-  { label: "360p (640x360)", width: 640, height: 360 }
+  // --- 16:9 ---
+  { label: "4K (3840x2160)", width: 3840, height: 2160, aspect: "16:9", premium: true },
+  { label: "1080p (1920x1080)", width: 1920, height: 1080, aspect: "16:9" },
+  { label: "720p (1280x720)", width: 1280, height: 720, aspect: "16:9" },
+  { label: "480p (854x480)", width: 854, height: 480, aspect: "16:9" },
+  { label: "360p (640x360)", width: 640, height: 360, aspect: "16:9" },
+
+  // --- 9:16 (Vertical) ---
+  { label: "1080p Vertical (1080x1920)", width: 1080, height: 1920, aspect: "9:16" },
+  { label: "720p Vertical (720x1280)", width: 720, height: 1280, aspect: "9:16" },
+  { label: "480p Vertical (480x854)", width: 480, height: 854, aspect: "9:16" },
+  { label: "360p Vertical (360x640)", width: 360, height: 640, aspect: "9:16" },
+
+  // --- 1:1 ---
+  { label: "Square (1080x1080)", width: 1080, height: 1080, aspect: "1:1" },
+  { label: "Square (720x720)", width: 720, height: 720, aspect: "1:1" },
+  { label: "Square (480x480)", width: 480, height: 480, aspect: "1:1" },
+
+  // --- 4:3 ---
+  { label: "1024x768 (XGA)", width: 1024, height: 768, aspect: "4:3" },
+  { label: "800x600 (SVGA)", width: 800, height: 600, aspect: "4:3" },
+  { label: "640x480 (VGA)", width: 640, height: 480, aspect: "4:3" }
 ];
 
 const FPS_OPTIONS = [24, 25, 30, 50, 60];
@@ -34,30 +53,21 @@ const FPS_OPTIONS = [24, 25, 30, 50, 60];
 export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
   const { tracks } = useTimelineStore();
   const { mediaItems } = useMediaStore();
+  const { canvasSize } = useEditorStore();
   const [progress, setProgress] = useState(0);
   const [isExporting, setIsExporting] = useState(false);
+  const { isLoaded, error, worker } = useFFmpegWorker();
   const [exportMessage, setExportMessage] = useState("");
   const [options, setOptions] = useState<ExportOptions>({
+    fps: 30,
     format: "mp4",
-    resolution: RESOLUTION_PRESETS[1], // Default to 1080p
     quality: "high",
-    fps: 30
+    resolution: RESOLUTION_PRESETS.find((preset) => preset.width === canvasSize.width && preset.height === canvasSize.height) || RESOLUTION_PRESETS[2] // default to 1080p
   });
-  const { isLoaded, error, worker } = useFFmpegWorker();
 
-  // Calculate timeline duration
-  const calculateDuration = () => {
-    let maxDuration = 0;
-    tracks.forEach((track) => {
-      track.clips?.forEach((clip) => {
-        const clipEnd = clip.duration - clip.trimStart - clip.trimEnd;
-        if (clipEnd > maxDuration) maxDuration = clipEnd;
-      });
-    });
-    return maxDuration;
-  };
+  const FILTERED_RESOLUTION_PRESETS = RESOLUTION_PRESETS.filter((preset) => preset.width / preset.height === canvasSize.width / canvasSize.height);
 
-  const duration = calculateDuration();
+  const duration = calculateTimelineDuration(tracks);
   const hasContent = duration > 0 && mediaItems.length > 0;
 
   // Estimate file size (rough approximation)
@@ -174,6 +184,13 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
     }
   };
 
+  useEffect(() => {
+    if (canvasSize) {
+      const defaultResolution = RESOLUTION_PRESETS.filter((preset) => preset.width / preset.height === canvasSize.width / canvasSize.height)[0];
+      if (defaultResolution) setOptions((prev) => ({ ...prev, resolution: { width: defaultResolution.width, height: defaultResolution.height } }));
+    }
+  }, [canvasSize]);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[500px]">
@@ -261,7 +278,7 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {RESOLUTION_PRESETS.map((preset) => (
+                      {FILTERED_RESOLUTION_PRESETS.map((preset) => (
                         <SelectItem key={preset.label} value={`${preset.width}x${preset.height}`} disabled={preset.premium && options.format === "webm"}>
                           <div className="flex items-center justify-between w-full">
                             <span>{preset.label}</span>
