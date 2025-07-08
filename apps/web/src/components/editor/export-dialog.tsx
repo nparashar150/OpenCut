@@ -5,7 +5,7 @@ import { ExportOptions } from "@/lib/export-utils";
 import { useMediaStore } from "@/stores/media-store";
 import { useTimelineStore } from "@/stores/timeline-store";
 import { AlertCircle, FileVideo, Info } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
@@ -58,14 +58,33 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
   const [isExporting, setIsExporting] = useState(false);
   const { isLoaded, error, worker } = useFFmpegWorker();
   const [exportMessage, setExportMessage] = useState("");
+  const activeExportRef = useRef<boolean>(false);
+  const messageHandlerRef = useRef<((event: MessageEvent) => void) | null>(null);
+
+  // Find matching resolution preset
+  const findMatchingPreset = () => {
+    const preset = RESOLUTION_PRESETS.find((preset) => preset.width === canvasSize.width && preset.height === canvasSize.height);
+    return preset || RESOLUTION_PRESETS[1]; // Default to 1080p if no match
+  };
+
   const [options, setOptions] = useState<ExportOptions>({
     fps: 30,
     format: "mp4",
     quality: "high",
-    resolution: RESOLUTION_PRESETS.find((preset) => preset.width === canvasSize.width && preset.height === canvasSize.height) || RESOLUTION_PRESETS[2] // default to 1080p
+    resolution: findMatchingPreset()
   });
 
-  const FILTERED_RESOLUTION_PRESETS = RESOLUTION_PRESETS.filter((preset) => preset.width / preset.height === canvasSize.width / canvasSize.height);
+  // Filter presets by aspect ratio
+  const getFilteredPresets = () => {
+    const canvasAspectRatio = canvasSize.width / canvasSize.height;
+    return RESOLUTION_PRESETS.filter((preset) => {
+      const presetAspectRatio = preset.width / preset.height;
+      // Allow small tolerance for floating point comparison
+      return Math.abs(presetAspectRatio - canvasAspectRatio) < 0.01;
+    });
+  };
+
+  const FILTERED_RESOLUTION_PRESETS = getFilteredPresets();
 
   const duration = calculateTimelineDuration(tracks);
   const hasContent = duration > 0 && mediaItems.length > 0;
@@ -86,7 +105,20 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
     const resolutionFactor = (options.resolution.width * options.resolution.height) / (1920 * 1080);
     const adjustedSize = sizeInMB * Math.sqrt(resolutionFactor);
 
-    return adjustedSize.toFixed(1);
+    // Add format overhead
+    const formatOverhead = options.format === "webm" ? 0.9 : 1.1;
+    const finalSize = adjustedSize * formatOverhead;
+
+    return finalSize.toFixed(1);
+  };
+
+  // Clean up previous export handler
+  const cleanupExportHandler = () => {
+    if (messageHandlerRef.current && worker) {
+      worker.removeEventListener("message", messageHandlerRef.current);
+      messageHandlerRef.current = null;
+    }
+    activeExportRef.current = false;
   };
 
   const handleExport = async () => {
@@ -100,32 +132,65 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
       return;
     }
 
+    if (activeExportRef.current) {
+      toast.error("An export is already in progress. Please wait for it to complete.");
+      return;
+    }
+
     try {
+      activeExportRef.current = true;
       setIsExporting(true);
       setProgress(0);
       setExportMessage("Initializing export...");
 
-      // Prepare export data with all media files
+      // Clean up any previous handler
+      cleanupExportHandler();
+
+      // Validate media items
+      const validMediaItems = mediaItems.filter((item) => {
+        if (!item.file) {
+          console.warn(`Media item ${item.name} has no file attached`);
+          return false;
+        }
+        return true;
+      });
+
+      if (validMediaItems.length === 0) {
+        throw new Error("No valid media files found. Please add media to your timeline.");
+      }
+
+      // Prepare export data with validated media files
       const exportData = {
         tracks: tracks.map((track) => ({
           ...track,
-          clips: track.clips || []
+          clips: (track.clips || []).filter((clip) => {
+            // Validate clip references
+            const mediaItem = mediaItems.find((item) => item.id === clip.mediaId);
+            if (!mediaItem) {
+              console.warn(`Clip references non-existent media: ${clip.mediaId}`);
+              return false;
+            }
+            return true;
+          })
         })),
-        mediaItems: mediaItems.map((item) => ({
-          ...item,
-          file: item.file // Ensure file is included
+        mediaItems: validMediaItems.map((item) => ({
+          id: item.id,
+          name: item.name,
+          type: item.type,
+          duration: item.duration,
+          file: item.file
         })),
         options
       };
 
-      // Set up worker message handler for this export
+      // Create handler for this export
       const handleWorkerMessage = (event: MessageEvent) => {
         const { type, progress: workerProgress, outputData, fileName, message, error: workerError } = event.data;
 
         switch (type) {
           case "EXPORT_PROGRESS":
-            setProgress(workerProgress || 0);
-            setExportMessage(message || `Processing... ${workerProgress}%`);
+            setProgress(Math.round(workerProgress || 0));
+            setExportMessage(message || `Processing... ${Math.round(workerProgress || 0)}%`);
             break;
 
           case "EXPORT_COMPLETE":
@@ -141,14 +206,19 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+
+            // Clean up blob URL after a delay
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
 
             toast.success("Export completed successfully!");
+
+            // Reset state after showing success
             setTimeout(() => {
               onOpenChange(false);
               setIsExporting(false);
               setProgress(0);
               setExportMessage("");
+              cleanupExportHandler();
             }, 1000);
             break;
 
@@ -158,11 +228,13 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
             setIsExporting(false);
             setProgress(0);
             setExportMessage("");
+            cleanupExportHandler();
             break;
         }
       };
 
-      // Add event listener for this export
+      // Store reference and add listener
+      messageHandlerRef.current = handleWorkerMessage;
       worker.addEventListener("message", handleWorkerMessage);
 
       // Send export request to worker
@@ -170,29 +242,47 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
         type: "EXPORT_PROJECT",
         data: exportData
       });
-
-      // Clean up event listener after export (with timeout as fallback)
-      setTimeout(() => {
-        worker.removeEventListener("message", handleWorkerMessage);
-      }, 600000); // 10 minutes timeout
     } catch (error) {
       console.error("Export failed:", error);
-      toast.error("Failed to export video. Please try again.");
+      toast.error(error instanceof Error ? error.message : "Failed to export video. Please try again.");
       setIsExporting(false);
       setProgress(0);
       setExportMessage("");
+      cleanupExportHandler();
     }
   };
 
+  // Clean up on unmount
   useEffect(() => {
-    if (canvasSize) {
-      const defaultResolution = RESOLUTION_PRESETS.filter((preset) => preset.width / preset.height === canvasSize.width / canvasSize.height)[0];
-      if (defaultResolution) setOptions((prev) => ({ ...prev, resolution: { width: defaultResolution.width, height: defaultResolution.height } }));
+    return () => {
+      cleanupExportHandler();
+    };
+  }, [worker]);
+
+  // Update resolution when canvas size changes
+  useEffect(() => {
+    if (canvasSize && !isExporting) {
+      const matchedPresets = getFilteredPresets();
+      if (matchedPresets.length > 0) {
+        setOptions((prev) => ({
+          ...prev,
+          resolution: matchedPresets[0]
+        }));
+      }
     }
-  }, [canvasSize]);
+  }, [canvasSize, isExporting]);
+
+  // Handle dialog close
+  const handleDialogClose = (open: boolean) => {
+    if (isExporting) {
+      toast.error("Cannot close dialog while exporting. Please wait for the export to complete.");
+      return;
+    }
+    onOpenChange(open);
+  };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleDialogClose}>
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -226,8 +316,12 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
         {isLoaded && !error && (
           <Tabs defaultValue="basic" className="w-full">
             <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="basic">Basic</TabsTrigger>
-              <TabsTrigger value="advanced">Advanced</TabsTrigger>
+              <TabsTrigger value="basic" disabled={isExporting}>
+                Basic
+              </TabsTrigger>
+              <TabsTrigger value="advanced" disabled={isExporting}>
+                Advanced
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="basic" className="space-y-4">
@@ -278,14 +372,20 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {FILTERED_RESOLUTION_PRESETS.map((preset) => (
-                        <SelectItem key={preset.label} value={`${preset.width}x${preset.height}`} disabled={preset.premium && options.format === "webm"}>
-                          <div className="flex items-center justify-between w-full">
-                            <span>{preset.label}</span>
-                            {preset.premium && <span className="text-xs text-muted-foreground ml-2">{options.format === "webm" ? "Not available for WebM" : "Large file size"}</span>}
-                          </div>
+                      {FILTERED_RESOLUTION_PRESETS.length > 0 ? (
+                        FILTERED_RESOLUTION_PRESETS.map((preset) => (
+                          <SelectItem key={preset.label} value={`${preset.width}x${preset.height}`} disabled={preset.premium && options.format === "webm"}>
+                            <div className="flex items-center justify-between w-full">
+                              <span>{preset.label}</span>
+                              {preset.premium && <span className="text-xs text-muted-foreground ml-2">{options.format === "webm" ? "Not available for WebM" : "Large file size"}</span>}
+                            </div>
+                          </SelectItem>
+                        ))
+                      ) : (
+                        <SelectItem value={`${options.resolution.width}x${options.resolution.height}`}>
+                          Custom ({options.resolution.width}x{options.resolution.height})
                         </SelectItem>
-                      ))}
+                      )}
                     </SelectContent>
                   </Select>
                 </div>
@@ -366,7 +466,7 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <Label>Include Audio</Label>
-                    <Switch defaultChecked />
+                    <Switch defaultChecked disabled={isExporting} />
                   </div>
                   <p className="text-xs text-muted-foreground">Export with audio tracks from timeline</p>
                 </div>
@@ -380,17 +480,17 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
             <div className="grid gap-2">
               <div className="flex justify-between text-sm">
                 <span>Export Progress</span>
-                <span className="font-medium">{progress}%</span>
+                <span className="font-medium">{Math.round(progress)}%</span>
               </div>
-              <Progress value={Math.min(progress, 100)} className="h-2" />
+              <Progress value={progress} className="h-2" />
               {exportMessage && <div className="text-sm text-muted-foreground animate-pulse">{exportMessage}</div>}
             </div>
           </div>
         )}
 
         <div className="flex justify-end gap-3 mt-6">
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isExporting}>
-            {isExporting ? "Cancel Export" : "Cancel"}
+          <Button variant="outline" onClick={() => handleDialogClose(false)} disabled={isExporting}>
+            {isExporting ? "Export in Progress" : "Cancel"}
           </Button>
           <Button onClick={handleExport} disabled={isExporting || !isLoaded || !hasContent} className="min-w-[120px]">
             {isExporting ? (
@@ -413,9 +513,13 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
 
 // Helper function to format duration
 function formatDuration(seconds: number): string {
-  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
   const remainingSeconds = Math.floor(seconds % 60);
-  if (minutes > 0) {
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${remainingSeconds}s`;
+  } else if (minutes > 0) {
     return `${minutes}m ${remainingSeconds}s`;
   }
   return `${remainingSeconds}s`;

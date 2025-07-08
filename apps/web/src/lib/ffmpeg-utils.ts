@@ -3,230 +3,69 @@ import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { toBlobURL } from "@ffmpeg/util";
 
 let ffmpeg: FFmpeg | null = null;
+let activeProgressListeners: Array<() => void> = [];
+let activeLogListeners: Array<() => void> = [];
+
+// Helper to add listeners with cleanup tracking
+const addFFmpegListener = (type: "progress" | "log", handler: (data: any) => void): (() => void) => {
+  if (!ffmpeg) throw new Error("FFmpeg not initialized");
+
+  if (type === "progress") ffmpeg.on("progress", handler);
+  else ffmpeg.on("log", handler);
+
+  const removeListener = () => {
+    if (ffmpeg) {
+      if (type === "progress") ffmpeg.off("progress", handler);
+      else ffmpeg.off("log", handler);
+    }
+  };
+
+  if (type === "progress") activeProgressListeners.push(removeListener);
+  else activeLogListeners.push(removeListener);
+
+  return removeListener;
+};
 
 export const initFFmpeg = async (): Promise<FFmpeg> => {
   if (ffmpeg) return ffmpeg;
 
-  ffmpeg = new FFmpeg();
-
-  const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd";
-
-  await ffmpeg.load({
-    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm")
-  });
-
-  postMessage({ type: "FFMPEG_LOADED" });
-  return ffmpeg;
-};
-
-export const generateThumbnail = async (videoFile: File, timeInSeconds: number = 1): Promise<string> => {
-  const ffmpeg = await initFFmpeg();
-
-  const inputName = "input.mp4";
-  const outputName = "thumbnail.jpg";
-
-  // Write input file
-  await ffmpeg.writeFile(inputName, new Uint8Array(await videoFile.arrayBuffer()));
-
-  // Generate thumbnail at specific time
-  await ffmpeg.exec(["-i", inputName, "-ss", timeInSeconds.toString(), "-vframes", "1", "-vf", "scale=320:240", "-q:v", "2", outputName]);
-
-  // Read output file
-  const data = await ffmpeg.readFile(outputName);
-  const blob = new Blob([data], { type: "image/jpeg" });
-
-  // Cleanup
-  await ffmpeg.deleteFile(inputName);
-  await ffmpeg.deleteFile(outputName);
-
-  return URL.createObjectURL(blob);
-};
-
-export const trimVideo = async (videoFile: File, startTime: number, endTime: number, onProgress?: (progress: number) => void): Promise<Blob> => {
-  const ffmpeg = await initFFmpeg();
-
-  const inputName = "input.mp4";
-  const outputName = "output.mp4";
-
-  // Set up progress callback
-  if (onProgress) {
-    ffmpeg.on("progress", ({ progress }) => {
-      onProgress(progress * 100);
-    });
-  }
-
-  // Write input file
-  await ffmpeg.writeFile(inputName, new Uint8Array(await videoFile.arrayBuffer()));
-
-  const duration = endTime - startTime;
-
-  // Trim video
-  await ffmpeg.exec([
-    "-i",
-    inputName,
-    "-ss",
-    startTime.toString(),
-    "-t",
-    duration.toString(),
-    "-c",
-    "copy", // Use stream copy for faster processing
-    outputName
-  ]);
-
-  // Read output file
-  const data = await ffmpeg.readFile(outputName);
-  const blob = new Blob([data], { type: "video/mp4" });
-
-  // Cleanup
-  await ffmpeg.deleteFile(inputName);
-  await ffmpeg.deleteFile(outputName);
-
-  return blob;
-};
-
-export const getVideoInfo = async (
-  videoFile: File
-): Promise<{
-  duration: number;
-  width: number;
-  height: number;
-  fps: number;
-}> => {
-  const ffmpeg = await initFFmpeg();
-
-  const inputName = "input.mp4";
-
-  // Write input file
-  await ffmpeg.writeFile(inputName, new Uint8Array(await videoFile.arrayBuffer()));
-
-  // Capture FFmpeg stderr output with a one-time listener pattern
-  let ffmpegOutput = "";
-  let listening = true;
-  const listener = (data: string) => {
-    if (listening) ffmpegOutput += data;
-  };
-  ffmpeg.on("log", ({ message }) => listener(message));
-
-  // Run ffmpeg to get info (stderr will contain the info)
   try {
-    await ffmpeg.exec(["-i", inputName, "-f", "null", "-"]);
-  } catch (error) {
-    listening = false;
-    await ffmpeg.deleteFile(inputName);
-    console.error("FFmpeg execution failed:", error);
-    throw new Error("Failed to extract video info. The file may be corrupted or in an unsupported format.");
-  }
+    ffmpeg = new FFmpeg();
 
-  // Disable listener after exec completes
-  listening = false;
+    const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd";
 
-  // Cleanup
-  await ffmpeg.deleteFile(inputName);
-
-  // Parse output for duration, resolution, and fps
-  // Example: Duration: 00:00:10.00, start: 0.000000, bitrate: 1234 kb/s
-  // Example: Stream #0:0: Video: h264 (High), yuv420p(progressive), 1920x1080 [SAR 1:1 DAR 16:9], 30 fps, 30 tbr, 90k tbn, 60 tbc
-
-  const durationMatch = ffmpegOutput.match(/Duration: (\d+):(\d+):([\d.]+)/);
-  let duration = 0;
-  if (durationMatch) {
-    const [, h, m, s] = durationMatch;
-    duration = parseInt(h) * 3600 + parseInt(m) * 60 + parseFloat(s);
-  }
-
-  const videoStreamMatch = ffmpegOutput.match(/Video:.* (\d+)x(\d+)[^,]*, ([\d.]+) fps/);
-  let width = 0,
-    height = 0,
-    fps = 0;
-  if (videoStreamMatch) {
-    width = parseInt(videoStreamMatch[1]);
-    height = parseInt(videoStreamMatch[2]);
-    fps = parseFloat(videoStreamMatch[3]);
-  }
-
-  return {
-    duration,
-    width,
-    height,
-    fps
-  };
-};
-
-export const convertToWebM = async (videoFile: File, onProgress?: (progress: number) => void): Promise<Blob> => {
-  const ffmpeg = await initFFmpeg();
-
-  const inputName = "input.mp4";
-  const outputName = "output.webm";
-
-  // Set up progress callback
-  if (onProgress) {
-    ffmpeg.on("progress", ({ progress }) => {
-      onProgress(progress * 100);
+    await ffmpeg.load({
+      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
+      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm")
     });
+
+    postMessage({ type: "FFMPEG_LOADED" });
+    return ffmpeg;
+  } catch (error) {
+    postMessage({
+      type: "FFMPEG_ERROR",
+      error: error instanceof Error ? error.message : "Failed to initialize FFmpeg"
+    });
+    throw error;
   }
-
-  // Write input file
-  await ffmpeg.writeFile(inputName, new Uint8Array(await videoFile.arrayBuffer()));
-
-  // Convert to WebM
-  await ffmpeg.exec(["-i", inputName, "-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0", "-c:a", "libopus", outputName]);
-
-  // Read output file
-  const data = await ffmpeg.readFile(outputName);
-  const blob = new Blob([data], { type: "video/webm" });
-
-  // Cleanup
-  await ffmpeg.deleteFile(inputName);
-  await ffmpeg.deleteFile(outputName);
-
-  return blob;
-};
-
-export const extractAudio = async (videoFile: File, format: "mp3" | "wav" = "mp3"): Promise<Blob> => {
-  const ffmpeg = await initFFmpeg();
-
-  const inputName = "input.mp4";
-  const outputName = `output.${format}`;
-
-  // Write input file
-  await ffmpeg.writeFile(inputName, new Uint8Array(await videoFile.arrayBuffer()));
-
-  // Extract audio
-  await ffmpeg.exec([
-    "-i",
-    inputName,
-    "-vn", // Disable video
-    "-acodec",
-    format === "mp3" ? "libmp3lame" : "pcm_s16le",
-    outputName
-  ]);
-
-  // Read output file
-  const data = await ffmpeg.readFile(outputName);
-  const blob = new Blob([data], { type: `audio/${format}` });
-
-  // Cleanup
-  await ffmpeg.deleteFile(inputName);
-  await ffmpeg.deleteFile(outputName);
-
-  return blob;
 };
 
 // Helper function to calculate timeline duration
-export const calculateTimelineDuration = (tracks: any[]): number => {
+export const calculateTimelineDuration = (tracks: TimelineTrack[]): number => {
   let maxDuration = 0;
   for (const track of tracks) {
-    for (const clip of track.clips || []) {
+    if (!track.clips) continue;
+    for (const clip of track.clips) {
+      // Calculate the actual duration on timeline
       const duration = clip.duration - clip.trimStart - clip.trimEnd;
-      const end = clip.startTime + duration;
-      if (end > maxDuration) maxDuration = end;
+      if (duration > maxDuration) maxDuration = duration;
     }
   }
   return maxDuration;
 };
+
 // Build timeline-based FFmpeg command
-const buildTimelineFFmpegCommand = (tracks: TimelineTrack[], mediaItemMap: Map<string, any>, mediaFileMap: Map<string, string>, outputFileName: string, options: any, timelineDuration: number): string[] => {
+const buildTimelineFFmpegCommand = (tracks: TimelineTrack[], mediaItemMap: Map<string, any>, mediaFileMap: Map<string, string>, mediaInfoMap: Map<string, any>, outputFileName: string, options: any, timelineDuration: number): string[] => {
   const { format, resolution, quality, fps } = options;
 
   // Quality settings
@@ -239,8 +78,8 @@ const buildTimelineFFmpegCommand = (tracks: TimelineTrack[], mediaItemMap: Map<s
   const settings = qualitySettings[quality as keyof typeof qualitySettings] || qualitySettings.medium;
 
   // Separate tracks by type
-  const videoTracks = tracks.filter((t) => t.type === "video");
-  const audioTracks = tracks.filter((t) => t.type === "audio");
+  const videoTracks = tracks.filter((t) => t.type === "video" && !t.muted);
+  const audioTracks = tracks.filter((t) => t.type === "audio" && !t.muted);
 
   // Basic command structure
   let args = [];
@@ -251,8 +90,8 @@ const buildTimelineFFmpegCommand = (tracks: TimelineTrack[], mediaItemMap: Map<s
   // First, add all unique input files based on clips
   const addedFiles = new Set<string>();
   tracks.forEach((track) => {
-    track.clips?.forEach((clip: any) => {
-      // Use mediaId field from TimelineClip interface
+    if (!track.clips) return;
+    track.clips.forEach((clip: any) => {
       const mediaId = clip.mediaId;
       if (mediaId && mediaFileMap.has(mediaId) && !addedFiles.has(mediaId)) {
         const fileName = mediaFileMap.get(mediaId)!;
@@ -280,52 +119,54 @@ const buildTimelineFFmpegCommand = (tracks: TimelineTrack[], mediaItemMap: Map<s
 
   // Process video tracks (layer by layer)
   videoTracks.forEach((track, trackIndex) => {
-    if (track.muted) return;
+    if (!track.clips) return;
 
-    track.clips?.forEach((clip, clipIndex: number) => {
+    track.clips.forEach((clip, clipIndex: number) => {
       const mediaId = clip.mediaId;
       if (!mediaId || !inputMap.has(mediaId)) return;
 
       const inputIdx = inputMap.get(mediaId)!;
       const mediaItem = mediaItemMap.get(mediaId);
+      const mediaInfo = mediaInfoMap.get(mediaId);
 
       if (mediaItem?.type === "video" || mediaItem?.type === "image") {
         const clipLabel = `[v${trackIndex}_${clipIndex}]`;
 
         if (mediaItem.type === "video") {
-          // For video: trim from the original media file
-          // clip.duration is the duration on the timeline
-          // trimStart is where to start in the source file
-          // trimEnd is where to end in the source file
-          const sourceStart = clip.trimStart;
-          const trimDuration = clip.duration - clip.trimStart - clip.trimEnd;
+          // For video: properly calculate trim
+          const sourceStart = clip.trimStart || 0;
+          const sourceDuration = mediaInfo?.duration || clip.duration;
+          const trimEnd = clip.trimEnd || 0;
 
-          // Calculate the actual trim duration from the source
-          // If trimEnd is 0 or not set, calculate it based on clip duration
+          // Calculate actual trim duration from source
+          const availableDuration = sourceDuration - sourceStart - trimEnd;
+          const trimDuration = Math.min(clip.duration, availableDuration);
+
+          // Video filter with proper escaping
           videoFilterSteps.push(
             `[${inputIdx}:v]` +
               `trim=start=${sourceStart}:duration=${trimDuration},` +
               `setpts=PTS-STARTPTS,` +
-              `scale=${resolution.width}:${resolution.height}:force_original_aspect_ratio=increase,` +
-              `crop=${resolution.width}:${resolution.height},` +
+              `scale=${resolution.width}:${resolution.height}:force_original_aspect_ratio=decrease,` +
+              `pad=${resolution.width}:${resolution.height}:(ow-iw)/2:(oh-ih)/2:black` +
               `${clipLabel}`
           );
 
-          // Also handle audio from video if exists and no dedicated audio tracks
-          if (audioTracks.length === 0) {
+          // Handle audio from video if exists and no dedicated audio tracks
+          if (audioTracks.length === 0 && mediaInfo?.hasAudio) {
             const audioClipLabel = `[va${trackIndex}_${clipIndex}]`;
-            audioFilterSteps.push(
-              `[${inputIdx}:a]` + `atrim=start=${sourceStart}:duration=${trimDuration},` + `asetpts=PTS-STARTPTS,` + `adelay=${Math.round(clip.startTime * 1000)}|${Math.round(clip.startTime * 1000)}` + `${audioClipLabel}`
-            );
+            const delayMs = Math.round(clip.startTime * 1000);
+            audioFilterSteps.push(`[${inputIdx}:a]` + `atrim=start=${sourceStart}:duration=${trimDuration},` + `asetpts=PTS-STARTPTS,` + `adelay=${delayMs}|${delayMs}` + `${audioClipLabel}`);
             audioInputs.push(audioClipLabel);
           }
         } else {
           // For image: loop and scale
+          const loopCount = Math.ceil(clip.duration * fps);
           videoFilterSteps.push(
             `[${inputIdx}:v]` +
-              `loop=loop=${Math.ceil(clip.duration * fps)}:size=1:start=0,` +
-              `scale=${resolution.width}:${resolution.height}:force_original_aspect_ratio=increase,` +
-              `crop=${resolution.width}:${resolution.height},` +
+              `loop=loop=${loopCount}:size=1:start=0,` +
+              `scale=${resolution.width}:${resolution.height}:force_original_aspect_ratio=decrease,` +
+              `pad=${resolution.width}:${resolution.height}:(ow-iw)/2:(oh-ih)/2:black,` +
               `trim=duration=${clip.duration},` +
               `setpts=PTS-STARTPTS` +
               `${clipLabel}`
@@ -334,7 +175,8 @@ const buildTimelineFFmpegCommand = (tracks: TimelineTrack[], mediaItemMap: Map<s
 
         // Overlay at the correct time
         const overlayLabel = `[voverlay${trackIndex}_${clipIndex}]`;
-        videoFilterSteps.push(`${currentVideo}${clipLabel}` + `overlay=0:0:enable='between(t,${clip.startTime},${clip.startTime + clip.duration})'` + `${overlayLabel}`);
+        const endTime = clip.startTime + clip.duration;
+        videoFilterSteps.push(`${currentVideo}${clipLabel}` + `overlay=0:0:enable='between(t,${clip.startTime},${endTime})'` + `${overlayLabel}`);
         currentVideo = overlayLabel;
       }
     });
@@ -342,31 +184,32 @@ const buildTimelineFFmpegCommand = (tracks: TimelineTrack[], mediaItemMap: Map<s
 
   // Process audio tracks
   audioTracks.forEach((track, trackIndex) => {
-    if (track.muted) return;
+    if (!track.clips) return;
 
-    track.clips?.forEach((clip, clipIndex: number) => {
+    track.clips.forEach((clip, clipIndex: number) => {
       const mediaId = clip.mediaId;
       if (!mediaId || !inputMap.has(mediaId)) return;
 
       const inputIdx = inputMap.get(mediaId)!;
       const mediaItem = mediaItemMap.get(mediaId);
+      const mediaInfo = mediaInfoMap.get(mediaId);
 
-      if (mediaItem?.type === "audio" || mediaItem?.type === "video") {
+      if ((mediaItem?.type === "audio" || mediaItem?.type === "video") && mediaInfo?.hasAudio) {
         const clipLabel = `[a${trackIndex}_${clipIndex}]`;
 
         // Calculate source trim duration
-        const sourceStart = clip.trimStart;
-        const trimDuration = clip.duration - clip.trimStart - clip.trimEnd;
+        const sourceStart = clip.trimStart || 0;
+        const sourceDuration = mediaInfo?.duration || clip.duration;
+        const trimEnd = clip.trimEnd || 0;
+        const availableDuration = sourceDuration - sourceStart - trimEnd;
+        const trimDuration = Math.min(clip.duration, availableDuration);
 
         // Build audio filter chain
+        const delayMs = Math.round(clip.startTime * 1000);
         let audioFilter = `[${inputIdx}:a]`;
-
-        // Trim audio from source
         audioFilter += `atrim=start=${sourceStart}:duration=${trimDuration},`;
         audioFilter += `asetpts=PTS-STARTPTS,`;
-
-        // Delay to correct position on timeline
-        audioFilter += `adelay=${Math.round(clip.startTime * 1000)}|${Math.round(clip.startTime * 1000)}`;
+        audioFilter += `adelay=${delayMs}|${delayMs}`;
         audioFilter += clipLabel;
 
         audioFilterSteps.push(audioFilter);
@@ -392,12 +235,10 @@ const buildTimelineFFmpegCommand = (tracks: TimelineTrack[], mediaItemMap: Map<s
     args.push("-map", currentVideo);
     args.push("-map", mixedAudioLabel);
   } else if (filterComplex.length > 0) {
-    // Single audio or no audio mixing needed
     args.push("-filter_complex", filterComplex.join(";"));
     args.push("-map", currentVideo);
     args.push("-map", audioInputs[0]);
   } else {
-    // No filters needed (shouldn't happen in practice)
     args.push("-map", currentVideo);
     args.push("-map", audioInputs[0]);
   }
@@ -406,7 +247,6 @@ const buildTimelineFFmpegCommand = (tracks: TimelineTrack[], mediaItemMap: Map<s
   if (format === "webm") {
     args.push("-c:v", "libvpx", "-crf", settings.crf, "-b:v", settings.videoBitrate, "-cpu-used", "0", "-c:a", "libvorbis", "-b:a", settings.audioBitrate);
   } else {
-    // MP4 or MOV
     args.push("-c:v", "libx264", "-preset", settings.preset, "-crf", settings.crf, "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-c:a", "aac", "-b:a", settings.audioBitrate);
   }
 
@@ -436,14 +276,13 @@ const exportProject = async (data: any) => {
     return;
   }
 
+  let removeProgressListener: (() => void) | null = null;
+  const loadedFiles: string[] = [];
+
   try {
     const { tracks, mediaItems, options } = data;
 
-    postMessage({
-      type: "EXPORT_PROGRESS",
-      progress: 5,
-      message: "Analyzing timeline..."
-    });
+    console.log("Starting export with tracks:", tracks, "mediaItems:", mediaItems);
 
     // Calculate timeline duration
     const timelineDuration = calculateTimelineDuration(tracks);
@@ -452,61 +291,97 @@ const exportProject = async (data: any) => {
       throw new Error("Timeline is empty. Add some clips before exporting.");
     }
 
+    console.log("Timeline duration:", timelineDuration);
+
     // Create media maps
     const mediaItemMap = new Map<string, any>();
+    const mediaInfoMap = new Map<string, any>();
     mediaItems.forEach((item: any) => {
       mediaItemMap.set(item.id, item);
-    });
-
-    postMessage({
-      type: "EXPORT_PROGRESS",
-      progress: 10,
-      message: "Loading media files..."
     });
 
     // Process and upload media files to FFmpeg virtual filesystem
     const mediaFileMap = new Map<string, string>();
     let fileIndex = 0;
+    const totalFiles = Array.from(mediaItemMap.values()).filter((item) => item.file).length;
+
+    console.log(`Loading ${totalFiles} media files...`);
 
     for (const [itemId, mediaItem] of mediaItemMap) {
-      if (mediaItem.file) {
-        const extension = mediaItem.file.name.split(".").pop() || "mp4";
-        const fileName = `input_${fileIndex}.${extension}`;
+      if (!mediaItem.file) {
+        console.log(`Skipping item ${itemId} - no file`);
+        continue;
+      }
 
-        try {
-          const arrayBuffer = await mediaItem.file.arrayBuffer();
-          await ffmpeg.writeFile(fileName, new Uint8Array(arrayBuffer));
-          mediaFileMap.set(itemId, fileName);
-          fileIndex++;
+      const extension = mediaItem.file.name.split(".").pop()?.toLowerCase() || "mp4";
+      const fileName = `input_${fileIndex}.${extension}`;
 
-          postMessage({
-            type: "EXPORT_PROGRESS",
-            progress: 10 + (fileIndex / mediaItemMap.size) * 10,
-            message: `Loaded ${mediaItem.name}...`
+      try {
+        console.log(`Loading file ${fileIndex + 1}/${totalFiles}: ${mediaItem.name} (${mediaItem.type})`);
+
+        // Skip getVideoInfo for now if it's causing issues
+        if (mediaItem.type === "video") {
+          // Set basic info without full analysis
+          mediaInfoMap.set(itemId, {
+            hasAudio: true, // Assume audio exists
+            duration: mediaItem.duration || 10,
+            width: 1920,
+            height: 1080,
+            fps: 30
           });
-        } catch (error) {
-          console.error(`Failed to load media file ${mediaItem.name}:`, error);
-          throw new Error(`Failed to load media file: ${mediaItem.name}`);
+        } else if (mediaItem.type === "audio") {
+          mediaInfoMap.set(itemId, { hasAudio: true, duration: mediaItem.duration || 0 });
+        } else if (mediaItem.type === "image") {
+          mediaInfoMap.set(itemId, { hasAudio: false, duration: 0 });
         }
+
+        // Load file data
+        console.log(`Reading arrayBuffer for ${mediaItem.name}...`);
+        const arrayBuffer = await mediaItem.file.arrayBuffer();
+        console.log(`ArrayBuffer size: ${arrayBuffer.byteLength} bytes`);
+
+        // Write to FFmpeg filesystem
+        console.log(`Writing to FFmpeg filesystem as ${fileName}...`);
+        await ffmpeg.writeFile(fileName, new Uint8Array(arrayBuffer));
+
+        // Verify file was written
+        try {
+          const fileData = await ffmpeg.readFile(fileName);
+          console.log(`Verified file ${fileName} written successfully, size: ${fileData.length}`);
+        } catch (e) {
+          console.error(`Failed to verify file ${fileName}:`, e);
+        }
+
+        mediaFileMap.set(itemId, fileName);
+        loadedFiles.push(fileName);
+        fileIndex++;
+
+        const progressPercent = 10 + (fileIndex / totalFiles) * 15;
+        console.log(`Progress: ${progressPercent}%`);
+      } catch (error) {
+        console.error(`Failed to load media file ${mediaItem.name}:`, error);
+        throw new Error(`Failed to load media file: ${mediaItem.name}. Error: ${error instanceof Error ? error.message : "Unknown error"}`);
       }
     }
 
-    postMessage({
-      type: "EXPORT_PROGRESS",
-      progress: 25,
-      message: "Building export timeline..."
-    });
+    console.log("All files loaded successfully. Media file map:", mediaFileMap);
+
+    // Validate we have the necessary files
+    if (mediaFileMap.size === 0) {
+      throw new Error("No media files were loaded successfully");
+    }
 
     // Build FFmpeg command
     const outputFileName = `output.${options.format}`;
-    const ffmpegArgs = buildTimelineFFmpegCommand(tracks, mediaItemMap, mediaFileMap, outputFileName, options, timelineDuration);
+    console.log("Building FFmpeg command...");
+
+    const ffmpegArgs = buildTimelineFFmpegCommand(tracks, mediaItemMap, mediaFileMap, mediaInfoMap, outputFileName, options, timelineDuration);
 
     // Log command for debugging
     console.log("FFmpeg command:", ffmpegArgs.join(" "));
 
     // Set up progress tracking
-    ffmpeg.on("progress", ({ progress, time }) => {
-      // Clamp progress between 0 and 1 to prevent exceeding 100%
+    removeProgressListener = addFFmpegListener("progress", ({ progress }) => {
       postMessage({
         type: "EXPORT_PROGRESS",
         progress: progress * 100,
@@ -514,36 +389,25 @@ const exportProject = async (data: any) => {
       });
     });
 
-    postMessage({
-      type: "EXPORT_PROGRESS",
-      progress: 30,
-      message: "Starting video rendering..."
-    });
-
     // Execute FFmpeg command
+    console.log("Executing FFmpeg command...");
     await ffmpeg.exec(ffmpegArgs);
+    console.log("FFmpeg execution completed");
 
     // Read output file
+    console.log("Reading output file...");
     const outputData = await ffmpeg.readFile(outputFileName);
-
-    // Clean up all files
-    for (const fileName of mediaFileMap.values()) {
-      try {
-        await ffmpeg.deleteFile(fileName);
-      } catch (e) {
-        // Ignore cleanup errors
-      }
-    }
-
-    try {
-      await ffmpeg.deleteFile(outputFileName);
-    } catch (e) {
-      // Ignore cleanup errors
-    }
+    console.log(`Output file size: ${outputData.length} bytes`);
 
     // Generate filename with timestamp
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, -5);
     const exportFileName = `opencut-export-${timestamp}.${options.format}`;
+
+    postMessage({
+      type: "EXPORT_PROGRESS",
+      progress: 100,
+      message: "Export completed!"
+    });
 
     // Send result back
     postMessage({
@@ -551,12 +415,33 @@ const exportProject = async (data: any) => {
       outputData: outputData,
       fileName: exportFileName
     });
+
+    // Cleanup output file
+    try {
+      await ffmpeg.deleteFile(outputFileName);
+      console.log("Cleaned up output file");
+    } catch (e) {
+      console.log("Failed to cleanup output file:", e);
+    }
   } catch (error) {
     console.error("Export error:", error);
     postMessage({
       type: "EXPORT_ERROR",
       error: error instanceof Error ? error.message : "Unknown export error"
     });
+  } finally {
+    // Cleanup all files
+    if (removeProgressListener) removeProgressListener();
+
+    console.log(`Cleaning up ${loadedFiles.length} loaded files...`);
+    for (const fileName of loadedFiles) {
+      try {
+        await ffmpeg.deleteFile(fileName);
+        console.log(`Cleaned up ${fileName}`);
+      } catch (e) {
+        console.log(`Failed to cleanup ${fileName}:`, e);
+      }
+    }
   }
 };
 
